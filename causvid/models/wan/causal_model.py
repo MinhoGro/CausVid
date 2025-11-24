@@ -1,3 +1,4 @@
+import logging
 from causvid.models.wan.wan_base.modules.attention import attention
 from causvid.models.wan.wan_base.modules.model import (
     WanRMSNorm,
@@ -277,6 +278,24 @@ class CausalHead(nn.Module):
             (1 + e[1]) + e[0]))
         return x
 
+class RecorderCausalWanSelfAttention(CausalWanSelfAttention):
+    def __init__(self, base: CausalWanSelfAttention, hook=None):
+        super().__init__(
+            dim = base.dim,
+            num_heads = base.num_heads,
+            window_size = base.window_size,
+            qk_norm = base.qk_norm,
+            eps = base.eps)
+
+        self.load_state_dict(base.state_dict())
+        self.hook = hook
+
+    def forward(self, *args, **kwargs):
+        y = super().forward(*args, **kwargs)
+        # hook
+        self.hook(y)
+        return y
+
 
 class CausalWanModel(ModelMixin, ConfigMixin):
     r"""
@@ -406,6 +425,21 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         self.block_mask = None
 
         self.num_frame_per_block = 1
+
+        # hook
+        self.captured = {
+            "self_attn": [],
+            "cross_attn": [],
+        }
+        def self_attn_hook(y):
+            # y: [B, L, dim]
+            y = y.detach().cpu()
+            self.captured["self_attn"].append(y)
+            logging.warning(f"Self attention hook called for {y[0, 1, :10]}")
+            return
+
+        blk_attn = self.blocks[-1].self_attn
+        self.blocks[-1].self_attn = RecorderCausalWanSelfAttention(blk_attn, self_attn_hook)
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = value
@@ -567,6 +601,9 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                     }
                 )
                 x = block(x, **kwargs)
+
+        # cross_attn hook
+        self.captured["cross_attn"].append(x)
 
         # head
         x = self.head(x, e.unflatten(dim=0, sizes=t.shape).unsqueeze(2))

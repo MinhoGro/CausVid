@@ -1,3 +1,5 @@
+import logging
+
 from causvid.models.wan.causal_inference import InferencePipeline
 from diffusers.utils import export_to_video
 from causvid.data import TextDataset
@@ -44,6 +46,24 @@ for prompt_index in tqdm(range(len(dataset))):
         noise=sampled_noise,
         text_prompts=prompts
     )[0].permute(0, 2, 3, 1).cpu().numpy()
+
+    if pipeline.generator_model_name == "causal_wan":
+        m = pipeline.generator.model
+        captured = getattr(m, "captured", None)
+
+        if captured:
+            self_attn_buf = captured.get("self_attn", [])
+            self_attn = torch.cat(self_attn_buf, dim=1).cpu()  # [B, n*L, dim]
+            torch.save(self_attn, "self_attn_tokens.pt")
+            self_attn_buf.clear()
+
+            cross_attn_buf = captured.get("cross_attn", [])
+            cross_attn = torch.cat(cross_attn_buf, dim=1).cpu()
+            torch.save(cross_attn, "cross_attn_tokens.pt")
+            cross_attn_buf.clear()
+
+        else:
+            logging.error(f'captured tensor is empty!')
 
     export_to_video(
         video, os.path.join(args.output_folder, f"output_{prompt_index:03d}.mp4"), fps=16)
