@@ -62,6 +62,16 @@ for prompt_index in tqdm(range(len(dataset))):
             torch.save(cross_attn, "cross_attn_tokens.pt")
             cross_attn_buf.clear()
 
+            latent_buf = captured.get("latent", [])
+            latent = torch.cat(latent_buf, dim=1).cpu()
+            torch.save(latent, "latent.pt")
+            latent_buf.clear()
+
+            denoise_latent_buf = captured.get("denoise_latent", [])
+            denoise_latent = torch.cat(denoise_latent_buf, dim=1).cpu()
+            torch.save(denoise_latent, "latent.pt")
+            denoise_latent_buf.clear()
+
         else:
             logging.error(f'captured tensor is empty!')
 

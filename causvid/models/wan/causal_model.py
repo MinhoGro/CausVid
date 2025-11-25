@@ -605,6 +605,11 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                 )
                 x = block(x, **kwargs)
 
+            denoised = self.head(x, e.unflatten(dim=0, sizes=t.shape).unsqueeze(2))
+            denoised = self.unpatchify(denoised, grid_sizes)
+            self.captured["denoise_latent"].append(denoised[0] - noise)
+            noise = denoised[0]
+
         # cross_attn hook
         self.captured["cross_attn"].append(x)
 
@@ -613,8 +618,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
-        self.captured["latent"].append(x)
-        self.captrured["denoised_latent"].append(x - noise)
+        self.captured["latent"].append(x[0])
         return torch.stack(x)
 
     def _forward_train(

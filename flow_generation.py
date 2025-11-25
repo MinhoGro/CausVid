@@ -39,7 +39,8 @@ def token_flow(t, h_patch, w_patch):
     return flow
 
 def main():
-    t = torch.load("cross_attn_tokens.pt") # [B, L, dim]
+    name = "latent.pt"
+    t = torch.load(name) # [B, L, dim]
     # torch.Size([1, 131040, 1536])
     # latent size [60, 104]
     # token size [L, 30, 52]
@@ -55,10 +56,17 @@ def main():
     w_patch = token_shape[4] // 2
     n_frames = t.shape[1] // (h_patch * w_patch)
 
-    t = t.view(1, n_frames, h_patch * w_patch, dim)
-    print(t.shape)
+    if name == "latent.pt":
+        t = t.permute(1, 2, 3, 0)
+        print(t.shape)
+        t = t.view(t.shape[0], h_patch * w_patch * 4, t.shape[-1])
+        # latent size: [16, 84, 60, 104], dim = 16, frames = 84
+        flow = token_flow(t, h_patch *2, w_patch *2)
+    else:
+        t = t.view(1, n_frames, h_patch * w_patch, dim)
+        print(t.shape)
 
-    flow = token_flow(t[0], h_patch, w_patch)
+        flow = token_flow(t[0], h_patch, w_patch)
     rgb_flow = []
     for f in flow:
         rgb_flow.append(flow_view(f))
