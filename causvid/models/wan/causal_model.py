@@ -528,7 +528,6 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
-        noise = x
         if self.model_type == 'i2v':
             assert clip_fea is not None and y is not None
         # params
@@ -591,6 +590,9 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                 return module(*inputs, **kwargs)
             return custom_forward
 
+        _x = x.detach().cpu()
+        self.captured["denoise_latent"].append(_x)
+
         for block_index, block in enumerate(self.blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 assert False
@@ -605,10 +607,10 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                 )
                 x = block(x, **kwargs)
 
-            denoised = self.head(x, e.unflatten(dim=0, sizes=t.shape).unsqueeze(2))
-            denoised = self.unpatchify(denoised, grid_sizes)
-            self.captured["denoise_latent"].append(denoised[0] - noise)
-            noise = denoised[0]
+            # calculate apart, reduce GPU memory
+            _x = x.detach().cpu()
+            _x = _x - self.captured["denoise_latent"][-1]
+            self.captured["denoise_latent"].append(_x)
 
         # cross_attn hook
         self.captured["cross_attn"].append(x)

@@ -39,12 +39,17 @@ def token_flow(t, h_patch, w_patch):
     return flow
 
 def main():
-    name = "latent.pt"
-    t = torch.load(name) # [B, L, dim]
+    name = "denoise_latent.pt"
+    t = torch.load(name, map_location=torch.device("cpu")) # [B, L, dim]
     # torch.Size([1, 131040, 1536])
     # latent size [60, 104]
     # token size [L, 30, 52]
-    print(t.shape)
+    if name == "denoise_latent.pt":
+        for i, _t in enumerate(t):
+            if _t.shape[0] == 1 :
+                t[i] = _t[0]
+    else:
+        print(t.shape)
 
     token_shape = []
     with open("configs/wan_causal_dmd.yaml", "r") as f:
@@ -56,7 +61,7 @@ def main():
     w_patch = token_shape[4] // 2
     n_frames = t.shape[1] // (h_patch * w_patch)
 
-    if name == "latent.pt":
+    if name == "latent.pt" or name == "denoise_latent.pt":
         t = t.permute(1, 2, 3, 0)
         print(t.shape)
         t = t.view(t.shape[0], h_patch * w_patch * 4, t.shape[-1])
