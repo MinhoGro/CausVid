@@ -7,6 +7,10 @@ import math
 import matplotlib
 import imageio, numpy as np
 
+# patch = (1, 2, 2)
+# latent -> token, [H/2, W/2] = 30 * 52
+# frame per block -> para.num_frame_per_block
+
 def flow_view(flow):
     dx, dy = torch.chunk(flow, chunks=2, dim=-1)
     angle = torch.atan2(dx, dy)
@@ -36,6 +40,9 @@ def token_flow(t, h_patch, w_patch):
 
 def main():
     t = torch.load("cross_attn_tokens.pt") # [B, L, dim]
+    # torch.Size([1, 131040, 1536])
+    # latent size [60, 104]
+    # token size [L, 30, 52]
     print(t.shape)
 
     token_shape = []
@@ -43,10 +50,10 @@ def main():
         cfg = yaml.load(f, Loader=yaml.FullLoader)
         token_shape = cfg['image_or_video_shape']
 
-    n_frames = token_shape[1]
     dim = t.shape[-1]
-    h_patch = token_shape[3]
-    w_patch = token_shape[4]
+    h_patch = token_shape[3] // 2
+    w_patch = token_shape[4] // 2
+    n_frames = t.shape[1] // (h_patch * w_patch)
 
     t = t.view(1, n_frames, h_patch * w_patch, dim)
     print(t.shape)
