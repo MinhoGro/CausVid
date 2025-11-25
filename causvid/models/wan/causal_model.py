@@ -430,6 +430,8 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         self.captured = {
             "self_attn": [],
             "cross_attn": [],
+            "latent": [],
+            "denoise_latent": [],
         }
         def self_attn_hook(y):
             # y: [B, L, dim]
@@ -526,6 +528,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
+        noise = x
         if self.model_type == 'i2v':
             assert clip_fea is not None and y is not None
         # params
@@ -610,6 +613,8 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
+        self.captured["latent"].append(x)
+        self.captrured["denoised_latent"].append(x - noise)
         return torch.stack(x)
 
     def _forward_train(
