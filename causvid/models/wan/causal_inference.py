@@ -187,6 +187,9 @@ class InferencePipeline(torch.nn.Module):
                         current_end=(
                             block_index + 1) * self.num_frame_per_block * self.frame_seq_length
                     )
+                    # capture latent
+                    self.captured["latent"][2].append(denoised_pred)
+                    self.captured["noise"][2].append(denoised_pred - noisy_input)
 
             # Step 2.2: rerun with timestep zero to update the cache
             output[:, block_index * self.num_frame_per_block:(

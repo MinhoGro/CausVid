@@ -69,13 +69,13 @@ for prompt_index in tqdm(range(len(dataset))):
         if latent_cap:
             # latent [1, 3, 16, 60, 104]
             latent_buf = latent_cap.get("latent", [])
-            latent = torch.cat(latent_buf, dim=1).cpu()
+            # latent = torch.cat(latent_buf, dim=1).cpu()
             torch.save(latent_buf, "latent.pt")
             latent_buf.clear()
 
             denoise_latent_buf = latent_cap.get("noise", [])
-            denoise_latent = torch.cat(denoise_latent_buf, dim=1).cpu()
-            torch.save(denoise_latent, "noise.pt")
+            # denoise_latent = torch.cat(denoise_latent_buf, dim=1).cpu()
+            torch.save(denoise_latent_buf, "noise.pt")
             denoise_latent_buf.clear()
 
     export_to_video(

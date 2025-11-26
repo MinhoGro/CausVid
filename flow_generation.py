@@ -39,42 +39,55 @@ def token_flow(t, h_patch, w_patch):
     return flow
 
 def main():
-    name = "denoise_latent.pt"
+    name = "noise.pt"
     t = torch.load(name, map_location=torch.device("cpu")) # [B, L, dim]
     # torch.Size([1, 131040, 1536])
-    # latent size [60, 104]
+    # latent frame size [60, 104]
     # token size [L, 30, 52]
-    if name == "denoise_latent.pt":
-        for i, _t in enumerate(t):
-            if _t.shape[0] == 1 :
-                t[i] = _t[0]
+    if name == "latent.pt" or name == "noise.pt":
+        # latent [1, 3, 16, 60, 104] * 3
+        t = t[0]    # list of tensor
+        # print shape
+
+        x = torch.cat(t, dim=0)  # [list_len, 3, 16, 60, 104]  (B合并)
+        x = x.view(-1, 16, 60, 104)  # 展平帧维 -> [3*list_len, 16, 60, 104]
+        x = x.permute(0, 2, 3, 1)  # -> [3*list_len, 60, 104, 16]
+        x = x.contiguous()
+        x = x.view(21, 60*104, 16)
+
+        print(x.shape)
+
+        flow = token_flow(x, 60, 104)
+        rgb_flow = []
+        for f in flow:
+            rgb_flow.append(flow_view(f))
+
     else:
         print(t.shape)
+        token_shape = []
+        with open("configs/wan_causal_dmd.yaml", "r") as f:
+            cfg = yaml.load(f, Loader=yaml.FullLoader)
+            token_shape = cfg['image_or_video_shape']
 
-    token_shape = []
-    with open("configs/wan_causal_dmd.yaml", "r") as f:
-        cfg = yaml.load(f, Loader=yaml.FullLoader)
-        token_shape = cfg['image_or_video_shape']
+        dim = t.shape[-1]
+        h_patch = token_shape[3] // 2
+        w_patch = token_shape[4] // 2
+        n_frames = t.shape[1] // (h_patch * w_patch)
 
-    dim = t.shape[-1]
-    h_patch = token_shape[3] // 2
-    w_patch = token_shape[4] // 2
-    n_frames = t.shape[1] // (h_patch * w_patch)
+        if name == "latent.pt" or name == "denoise_latent.pt":
+            t = t.permute(1, 2, 3, 0)
+            print(t.shape)
+            t = t.view(t.shape[0], h_patch * w_patch * 4, t.shape[-1])
+            # latent size: [16, 84, 60, 104], dim = 16, frames = 84
+            flow = token_flow(t, h_patch *2, w_patch *2)
+        else:
+            t = t.view(1, n_frames, h_patch * w_patch, dim)
+            print(t.shape)
 
-    if name == "latent.pt" or name == "denoise_latent.pt":
-        t = t.permute(1, 2, 3, 0)
-        print(t.shape)
-        t = t.view(t.shape[0], h_patch * w_patch * 4, t.shape[-1])
-        # latent size: [16, 84, 60, 104], dim = 16, frames = 84
-        flow = token_flow(t, h_patch *2, w_patch *2)
-    else:
-        t = t.view(1, n_frames, h_patch * w_patch, dim)
-        print(t.shape)
-
-        flow = token_flow(t[0], h_patch, w_patch)
-    rgb_flow = []
-    for f in flow:
-        rgb_flow.append(flow_view(f))
+            flow = token_flow(t[0], h_patch, w_patch)
+        rgb_flow = []
+        for f in flow:
+            rgb_flow.append(flow_view(f))
 
     frames_uint8 = []
     for i, frame in enumerate(rgb_flow):  # frame shape [H,W,3], float in [0,1]
