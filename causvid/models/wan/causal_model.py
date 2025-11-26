@@ -430,8 +430,6 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         self.captured = {
             "self_attn": [],
             "cross_attn": [],
-            "latent": [],
-            "denoise_latent": [],
         }
         def self_attn_hook(y):
             # y: [B, L, dim]
@@ -591,7 +589,6 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             return custom_forward
 
         _x = x.detach().cpu()
-        self.captured["denoise_latent"].append(_x)
 
         for block_index, block in enumerate(self.blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
@@ -607,11 +604,6 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                 )
                 x = block(x, **kwargs)
 
-            # calculate apart, reduce GPU memory
-            _x = x.detach().cpu()
-            _x = _x - self.captured["denoise_latent"][-1]
-            self.captured["denoise_latent"].append(_x)
-
         # cross_attn hook
         self.captured["cross_attn"].append(x)
 
@@ -620,7 +612,6 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
-        self.captured["latent"].append(x[0])
         return torch.stack(x)
 
     def _forward_train(

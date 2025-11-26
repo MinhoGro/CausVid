@@ -39,6 +39,10 @@ class InferencePipeline(torch.nn.Module):
         self.args = args
         self.num_frame_per_block = getattr(
             args, "num_frame_per_block", 1)
+        self.captured = {
+            "latent": [[] for _ in range(3)],
+            "noise": [[] for _ in range(3)],
+        }
 
         print(f"KV inference with {self.num_frame_per_block} frames per block")
 
@@ -161,6 +165,9 @@ class InferencePipeline(torch.nn.Module):
                             block_index + 1) * self.num_frame_per_block * self.frame_seq_length
                     )
                     next_timestep = self.denoising_step_list[index + 1]
+                    # capture latent
+                    self.captured["latent"][index].append(denoised_pred)
+                    self.captured["noise"][index].append(denoised_pred - noisy_input)
                     noisy_input = self.scheduler.add_noise(
                         denoised_pred.flatten(0, 1),
                         torch.randn_like(denoised_pred.flatten(0, 1)),
