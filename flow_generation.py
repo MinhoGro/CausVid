@@ -6,6 +6,8 @@ import torch.nn.functional as F
 import math
 import matplotlib
 import imageio, numpy as np
+from torch.distributed.tensor import zeros
+
 
 # patch = (1, 2, 2)
 # latent -> token, [H/2, W/2] = 30 * 52
@@ -24,7 +26,7 @@ def flow_view(flow):
     return rgb
 
 def token_flow(t, h_patch, w_patch):
-    t = F.normalize(t, dim=-1) # normalize
+    # t = F.normalize(t, dim=-1) # normalize
     flow = []
     for q, k in zip(t[:-1], t[1:]):
         sim = torch.matmul(q, k.transpose(0, 1))
@@ -38,8 +40,21 @@ def token_flow(t, h_patch, w_patch):
         flow.append(coords)
     return flow
 
+def save_flow_video(rgb_flow, video_name):
+    frames_uint8 = []
+    for i, frame in enumerate(rgb_flow):  # frame shape [H,W,3], float in [0,1]
+        # frame = [f[..., :]/20 for f in frame]
+        img_uint8 = (np.clip(frame, 0, 1) * 255).astype(np.uint8).squeeze(axis=2)
+        output_dir = 'flow_images'
+        if not os.path.isdir(f'{output_dir}'):
+            os.makedirs(f'{output_dir}', exist_ok=True)
+        imageio.imwrite(f"{output_dir}/frame_{i:03d}.png", img_uint8)
+        frames_uint8.append(img_uint8)
+
+    imageio.mimsave(f"{video_name}.mp4", frames_uint8, fps=16, codec="libx264")
+
 def main():
-    name = "noise.pt"
+    name = "latent.pt"
     t = torch.load(name, map_location=torch.device("cpu")) # [B, L, dim]
     # torch.Size([1, 131040, 1536])
     # latent frame size [60, 104]
@@ -57,10 +72,30 @@ def main():
 
         print(x.shape)
 
+        # test each dimension
+        all_flow = np.zeros((20,60,104,1,3))
+        for i in range(16):
+            _x = x[..., i]
+            _x = _x.unsqueeze(-1)
+            flow = token_flow(_x, 60, 104)
+            rgb_flow = []
+            for f in flow:
+                rgb_flow.append(flow_view(f))
+
+            # save_flow_video(rgb_flow, video_name=f'flow_video_{i:03d}')
+            all_flow += rgb_flow
+        save_flow_video(all_flow, video_name=f'all_flow')
+
+        return
+
+        # select some channels
+        x = x[..., [5,15]]
         flow = token_flow(x, 60, 104)
         rgb_flow = []
         for f in flow:
             rgb_flow.append(flow_view(f))
+
+        save_flow_video(rgb_flow, video_name=f'flow_video')
 
     else:
         print(t.shape)
@@ -89,16 +124,7 @@ def main():
         for f in flow:
             rgb_flow.append(flow_view(f))
 
-    frames_uint8 = []
-    for i, frame in enumerate(rgb_flow):  # frame shape [H,W,3], float in [0,1]
-        img_uint8 = (np.clip(frame, 0, 1) * 255).astype(np.uint8).squeeze(axis=2)
-        output_dir = 'flow_images'
-        if not os.path.isdir(f'{output_dir}'):
-            os.makedirs(f'{output_dir}', exist_ok=True)
-        imageio.imwrite(f"{output_dir}/frame_{i:03d}.png", img_uint8)
-        frames_uint8.append(img_uint8)
-
-    imageio.mimsave("flow_video.mp4", frames_uint8, fps=16, codec="libx264")
+        save_flow_video(rgb_flow, video_name='flow_video')
 
 if __name__ == '__main__':
     main()
