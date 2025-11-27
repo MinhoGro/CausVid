@@ -5,6 +5,7 @@ from causvid.models import (
 )
 from typing import List, Optional
 import torch
+from .latent_warp import LatentWarper
 
 
 class InferencePipeline(torch.nn.Module):
@@ -48,6 +49,8 @@ class InferencePipeline(torch.nn.Module):
 
         if self.num_frame_per_block > 1:
             self.generator.model.num_frame_per_block = self.num_frame_per_block
+
+        self.new_latent = torch.zeros(1, 3, 16, 60, 104)
 
     def _initialize_kv_cache(self, batch_size, dtype, device):
         """
@@ -168,6 +171,14 @@ class InferencePipeline(torch.nn.Module):
                     # capture latent
                     self.captured["latent"][index].append(denoised_pred)
                     self.captured["noise"][index].append(denoised_pred - noisy_input)
+
+                    # if not 1st video chunk
+                    if index == 0 and len(self.captured["latent"][index]) > 1:
+                        # latent warp
+                        warper = LatentWarper(self.captured["latent"][index][-2], denoised_pred)
+                        self.new_latent = warper.warp() # next 3 frames latent, size: [1, 3, 16, 60, 104]
+                        denoised_pred = self.new_latent.to(denoised_pred.device, denoised_pred.dtype)
+
                     noisy_input = self.scheduler.add_noise(
                         denoised_pred.flatten(0, 1),
                         torch.randn_like(denoised_pred.flatten(0, 1)),

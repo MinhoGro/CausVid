@@ -72,24 +72,24 @@ def main():
 
         print(x.shape)
 
-        # test each dimension
-        all_flow = np.zeros((20,60,104,1,3))
-        for i in range(16):
-            _x = x[..., i]
-            _x = _x.unsqueeze(-1)
-            flow = token_flow(_x, 60, 104)
-            rgb_flow = []
-            for f in flow:
-                rgb_flow.append(flow_view(f))
-
-            # save_flow_video(rgb_flow, video_name=f'flow_video_{i:03d}')
-            all_flow += rgb_flow
-        save_flow_video(all_flow, video_name=f'all_flow')
-
-        return
+        # # test each dimension
+        # all_flow = np.zeros((20,60,104,1,3))
+        # for i in range(16):
+        #     _x = x[..., i]
+        #     _x = _x.unsqueeze(-1)
+        #     flow = token_flow(_x, 60, 104)
+        #     rgb_flow = []
+        #     for f in flow:
+        #         rgb_flow.append(flow_view(f))
+        #
+        #     # save_flow_video(rgb_flow, video_name=f'flow_video_{i:03d}')
+        #     all_flow += rgb_flow
+        # save_flow_video(all_flow, video_name=f'all_flow')
+        #
+        # return
 
         # select some channels
-        x = x[..., [5,15]]
+        x = x[..., [2,3,5]]
         flow = token_flow(x, 60, 104)
         rgb_flow = []
         for f in flow:
