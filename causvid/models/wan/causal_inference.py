@@ -1,3 +1,5 @@
+import logging
+
 from causvid.models import (
     get_diffusion_wrapper,
     get_text_encoder_wrapper,
@@ -41,8 +43,7 @@ class InferencePipeline(torch.nn.Module):
         self.num_frame_per_block = getattr(
             args, "num_frame_per_block", 1)
         self.captured = {
-            "latent": [[] for _ in range(3)],
-            "noise": [[] for _ in range(3)],
+            "latent": [[] for _ in range(len(self.denoising_step_list))],
         }
 
         print(f"KV inference with {self.num_frame_per_block} frames per block")
@@ -170,14 +171,44 @@ class InferencePipeline(torch.nn.Module):
                     next_timestep = self.denoising_step_list[index + 1]
                     # capture latent
                     self.captured["latent"][index].append(denoised_pred)
-                    self.captured["noise"][index].append(denoised_pred - noisy_input)
 
-                    # if not 1st video chunk
-                    if index == 0 and len(self.captured["latent"][index]) > 1:
+                    latent_warpt = False
+                    # if not 1st video chunk, warp latents.
+                    if index == 0 and len(self.captured["latent"][-1]) > 0:  # captured["latent"].size() = [time_step_index, block_index, ...]
+                        logging.warning(f'current timestep {current_timestep}\n.')
                         # latent warp
-                        warper = LatentWarper(self.captured["latent"][index][-2], denoised_pred)
-                        self.new_latent = warper.warp() # next 3 frames latent, size: [1, 3, 16, 60, 104]
+                        warper = LatentWarper(self.captured["latent"][-1][-1], denoised_pred)
+                        self.new_latent = warper.warp() # next 3 frames latent, type=tensor, size: [1, 3, 16, 60, 104]
                         denoised_pred = self.new_latent.to(denoised_pred.device, denoised_pred.dtype)
+                        latent_warpt = True
+                        # warpt step -> final step
+                        break
+
+                    # if not first chunk, skip steps
+                    if latent_warpt:
+                        final_timestep = self.denoising_step_list[-1]
+                        noisy_input = self.scheduler.add_noise(
+                            denoised_pred.flatten(0, 1),
+                            torch.randn_like(denoised_pred.flatten(0, 1)),
+                            final_timestep *
+                            torch.ones([batch_size], device="cuda",
+                                       dtype=torch.long)
+                        ).unflatten(0, denoised_pred.shape[:2])
+                        timestep = torch.ones(
+                            [batch_size, self.num_frame_per_block], device=noise.device,
+                            dtype=torch.int64) * final_timestep
+                        denoised_pred = self.generator(
+                            noisy_image_or_video=noisy_input,
+                            conditional_dict=conditional_dict,
+                            timestep=timestep,
+                            kv_cache=self.kv_cache1,
+                            crossattn_cache=self.crossattn_cache,
+                            current_start=block_index * self.num_frame_per_block * self.frame_seq_length,
+                            current_end=(
+                                block_index + 1) * self.num_frame_per_block * self.frame_seq_length
+                        )
+                        self.captured["latent"][-1].append(denoised_pred) # save captured latent.
+                        break
 
                     noisy_input = self.scheduler.add_noise(
                         denoised_pred.flatten(0, 1),
@@ -199,8 +230,7 @@ class InferencePipeline(torch.nn.Module):
                             block_index + 1) * self.num_frame_per_block * self.frame_seq_length
                     )
                     # capture latent
-                    self.captured["latent"][2].append(denoised_pred)
-                    self.captured["noise"][2].append(denoised_pred - noisy_input)
+                    self.captured["latent"][-1].append(denoised_pred)
 
             # Step 2.2: rerun with timestep zero to update the cache
             output[:, block_index * self.num_frame_per_block:(

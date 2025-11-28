@@ -4,30 +4,54 @@ import math
 import matplotlib
 import imageio
 import logging
+import os
+from pathlib import Path
 
 class LatentWarper:
     def __init__(self, pre_block, cur_block, *args, **kwargs):
         self.pre_block = pre_block
         self.cur_block = cur_block
+        self.output_dir = '/root/autodl-tmp/CausVid/flows'
 
-    def flow_frame_visualize(self, flow):
-        dx, dy = torch.chunk(flow, chunks=2, dim=-1)
+    def _has_file(self, b: str) -> bool:
+        p = Path(self.output_dir)
+        os.makedirs(p, exist_ok=True)
+        # 目录存在且其中有名为 t 的文件则返回 True
+        return (p / b).is_file()
+
+    def save_flow_video(self, rgb_flow, video_name):
+        frames_uint8 = []
+        for i, frame in enumerate(rgb_flow):  # frame shape [H,W,3], float in [0,1]
+            # frame = [f[..., :]/20 for f in frame]
+            img_uint8 = (np.clip(frame, 0, 1) * 255).astype(np.uint8).squeeze(axis=2)
+            # if not os.path.isdir(f'{output_dir}'):
+            #     os.makedirs(f'{output_dir}', exist_ok=True)
+            # imageio.imwrite(f"{output_dir}/frame_{i:03d}.png", img_uint8)
+            frames_uint8.append(img_uint8)
+
+        imageio.mimsave(f"{self.output_dir}/{video_name}", frames_uint8, fps=1, codec="libx264")
+
+    def flow_view(self, f):
+        dx, dy = torch.chunk(f, chunks=2, dim=-1)
         angle = torch.atan2(dx, dy)
         hue = (angle + math.pi) / (2 * math.pi)
         mag = torch.sqrt(dx * dx + dy * dy)
         mag_norm = (mag / mag.max().clamp(min=1e-6)).clamp(0, 1)
 
         sat = 0.9
-        hsv = np.stack([hue, sat * np.ones_like(hue), mag_norm], axis=-1)
-        rgb = matplotlib.colors.hsv_to_rgb(hsv)
+        # sat_t = torch.as_tensor(sat, device=hue.device, dtype=hue.dtype)
+        hsv = torch.stack([hue, sat * torch.ones_like(hue), mag_norm], dim=-1)
+        rgb = matplotlib.colors.hsv_to_rgb(hsv.cpu().numpy())
         return rgb
 
-    def view_flow(self, flow):
+    def flow_monitor(self, flow):
         rgb_flow = []
         for f in flow:
-            rgb_flow.append(self.flow_frame_visualize(f))
-
-        imageio.mimsave(f"flow_video.mp4", rgb_flow, fps=16, codec="libx264")
+            rgb_flow.append(self.flow_view(f))
+        block = 0
+        while self._has_file(b=f'flow_video{block}.mp4'):
+            block += 1
+        self.save_flow_video(rgb_flow, video_name=f'flow_video{block}.mp4')
 
     def token_flow(self, t, h_patch, w_patch):
         # t = F.normalize(t, dim=-1) # normalize
@@ -43,8 +67,7 @@ class LatentWarper:
             coords = coords.view(h_patch, w_patch, 2)
             flow.append(coords)
 
-        # visualization, forbidden for now.
-        # self.view_flow(flow)
+        self.flow_monitor(flow)
         return flow
 
     def warp(self):
@@ -69,13 +92,13 @@ class LatentWarper:
         H, W = self.cur_block.shape[-2:]
         ys = torch.arange(H)
         xs = torch.arange(W)
-        coords_y, coords_x = torch.meshgrid(ys, xs, indexing='ij')  # grid_y/grid_x: [H, W],
+        coords_y0, coords_x0 = torch.meshgrid(ys, xs, indexing='ij')  # grid_y/grid_x: [H, W],
                                                                     # (grid_y[i, j], grid_x[i, j]) == (i, j)
-        coords_y = coords_y.clone().to(self.cur_block.device)
-        coords_x = coords_x.clone().to(self.cur_block.device)
+        new_latent = self.pre_block[0][2].unsqueeze(0)
         warpt_latent = []
         for index in range(3):
-            # 1st layer
+            coords_y = coords_y0.clone().to(self.cur_block.device)
+            coords_x = coords_x0.clone().to(self.cur_block.device)
             coords_x -= flow[index, ..., 1]
             coords_y -= flow[index, ..., 0]
 
@@ -84,7 +107,7 @@ class LatentWarper:
             coords = torch.stack([coords_y_norm, coords_x_norm], dim=-1)  # [H, W, 2]
 
             new_latent = F.grid_sample(
-                self.pre_block[0][2].unsqueeze(0).float(),
+                new_latent.float(),
                 coords.unsqueeze(0).float(),
                 mode='bilinear',
                 padding_mode='zeros',
