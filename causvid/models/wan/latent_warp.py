@@ -3,6 +3,7 @@ import numpy as np
 import math
 import matplotlib
 import imageio
+import imageio.v3 as iio
 import logging
 import os
 from pathlib import Path
@@ -12,12 +13,16 @@ class LatentWarper:
         self.pre_block = pre_block
         self.cur_block = cur_block
         self.output_dir = '/root/autodl-tmp/CausVid/flows'
+        self.localout_dir = '../../../flows'
+        self.p = Path(self.output_dir)
 
     def _has_file(self, b: str) -> bool:
-        p = Path(self.output_dir)
-        os.makedirs(p, exist_ok=True)
+        if os.path.isdir(self.p):
+            os.makedirs(self.p, exist_ok=True)
+        else:
+            self.p = Path(self.localout_dir)
         # 目录存在且其中有名为 t 的文件则返回 True
-        return (p / b).is_file()
+        return (self.p / b).is_file()
 
     def save_flow_video(self, rgb_flow, video_name):
         frames_uint8 = []
@@ -29,7 +34,7 @@ class LatentWarper:
             # imageio.imwrite(f"{output_dir}/frame_{i:03d}.png", img_uint8)
             frames_uint8.append(img_uint8)
 
-        imageio.mimsave(f"{self.output_dir}/{video_name}", frames_uint8, fps=1, codec="libx264")
+        imageio.mimsave(f"{self.p}/{video_name}", frames_uint8, fps=1, codec="libx264")
 
     def flow_view(self, f):
         dx, dy = torch.chunk(f, chunks=2, dim=-1)
@@ -70,23 +75,34 @@ class LatentWarper:
         self.flow_monitor(flow)
         return flow
 
+    def _latent_norm(self, x):
+        x_ch_first = x.transpose(1, 2)  # [4, 16, 60*104]
+
+        mn = x_ch_first.amin(dim=-1, keepdim=True)
+        mx = x_ch_first.amax(dim=-1, keepdim=True)
+        x_norm = (x_ch_first - mn) / (mx - mn + 1e-8)
+        latent = x_norm.transpose(1, 2)  # [4, 60*104, 16]
+        return latent
+
     def warp(self):
         # calculate flow
         latent = torch.cat([self.pre_block, self.cur_block], dim=0)     # [2, 3, 16, 60, 104],
                                                                         # denoise_pred size: [1, 3, 16, 60, 104]
-        latent = latent.view(-1, 16, 60, 104)
+        h_patch, w_patch = latent.shape[-2:] # for latent tensor, size is h=60,w=104
+        latent = latent.view(-1, 16, h_patch, w_patch)
         latent = latent.permute(0, 2, 3, 1)[1:5]  # [6, 60, 104, 16] -> [4, 60, 104, 16]
-        latent = latent.view(4, 60*104, 16)
-        latent = latent[..., 5]                     # select 5th. channel latent.
+        latent = latent.view(4, h_patch * w_patch, 16)
+        latent  = self._latent_norm(latent)
+        latent = latent[..., [2,5,14]]                     # select 5th. channel latent.
 
         if latent.dim() == 2:
             latent = latent.unsqueeze(-1)
         elif latent.dim() != 3:
             logging.error(f"latent: {latent.shape}, size error! should be 3")
 
-        flow = self.token_flow(latent, 60, 104)  # size: [3, 60, 104, 2]
+        flow = self.token_flow(latent, h_patch, w_patch)  # size: [3, 60, 104, 2]
         flow = torch.stack(flow, dim=0)
-        flow = flow.view(3, 60, 104, 2)
+        flow = flow.view(3, h_patch, w_patch, 2)
 
         # warp latent
         H, W = self.cur_block.shape[-2:]
@@ -115,16 +131,29 @@ class LatentWarper:
             )
             warpt_latent.append(new_latent)
 
-        return torch.cat(warpt_latent, dim=0).unsqueeze(0)
+        warpt_latent = torch.cat(warpt_latent, dim=0)
+        # A = latent[1:3].view(3, 60, 104,3).unsqueeze(-2).cpu().numpy()
+        # B = warpt_latent.permute(0,2,3,1)[..., [2, 5, 14]].unsqueeze(-2).cpu().numpy()
+        # W.save_flow_video(A, video_name=f'flow_video_A.mp4')
+        # W.save_flow_video(B, video_name=f'flow_video_B.mp4')
+
+        return warpt_latent.unsqueeze(0)
 
 
 if __name__ == "__main__":
-    name = "../../../latent.pt"
-    t = torch.load(name, map_location=torch.device("cpu")) # [B, L, dim]
-
+    tensor_name = "../../../latent.pt"
+    t = torch.load(tensor_name, map_location=torch.device("cpu")) # [B, L, dim]
     pre_block = t[0][0]
     cur_block = t[0][1]
 
     W = LatentWarper(pre_block, cur_block)
     warpt = W.warp()
     print(warpt.shape)
+
+    pre_block = pre_block.float()[0].permute(0, 2, 3, 1)[..., [0,1,2]]
+    warpt = warpt.float()[0].permute(0, 2, 3, 1)[..., [0,1,2]] # size = [3,60,104,3]
+
+    A = pre_block.unsqueeze(-2).cpu().numpy()
+    B = warpt.unsqueeze(-2).cpu().numpy()
+    W.save_flow_video(A, video_name=f'flow_video_A.mp4')
+    W.save_flow_video(B, video_name=f'flow_video_B.mp4')
