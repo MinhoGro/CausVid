@@ -73,10 +73,5 @@ for prompt_index in tqdm(range(len(dataset))):
             torch.save(latent_buf, "latent.pt")
             latent_buf.clear()
 
-            denoise_latent_buf = latent_cap.get("noise", [])
-            denoise_latent = torch.cat(denoise_latent_buf, dim=1).cpu()
-            torch.save(denoise_latent, "noise.pt")
-            denoise_latent_buf.clear()
-
     export_to_video(
         video, os.path.join(args.output_folder, f"output_{prompt_index:03d}.mp4"), fps=16)
