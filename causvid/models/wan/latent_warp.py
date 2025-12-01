@@ -7,6 +7,7 @@ import imageio.v3 as iio
 import logging
 import os
 from pathlib import Path
+import cv2
 
 class LatentWarper:
     def __init__(self, pre_block, cur_block, *args, **kwargs):
@@ -15,6 +16,36 @@ class LatentWarper:
         self.output_dir = '/root/autodl-tmp/CausVid/flows'
         self.localout_dir = '../../../flows'
         self.p = Path(self.output_dir)
+        # todo: build windows here
+
+    def _get_grid_coords(self, h_patch, w_patch, device):
+        ys = torch.arange(h_patch, device=device)
+        xs = torch.arange(w_patch, device=device)
+        grid_y, grid_x = torch.meshgrid(ys, xs, indexing='ij')  # [H, W], [H, W]
+        coords = torch.stack([grid_y, grid_x], dim=-1)  # [H, W, 2]
+        return coords
+
+    def _build_warp_window(self, h_patch, w_patch, window_size, device):
+        sub_window_step = window_size // 2
+        window = torch.zeros(h_patch*w_patch, h_patch*w_patch, device=device).float()
+
+        grid_coords = self._get_grid_coords(h_patch, w_patch, device)
+        grid_coords = grid_coords.view(h_patch*w_patch, 2)
+        for index, w in enumerate(window):
+            coord_h, coord_w = grid_coords[index][0], grid_coords[index][1]
+            h_start, h_end = coord_h - sub_window_step, coord_h + sub_window_step + 1
+            w_start, w_end = coord_w - sub_window_step, coord_w + sub_window_step + 1
+            h_start = 0 if h_start < 0 else h_start
+            w_start = 0 if w_start < 0 else w_start
+            h_end = h_patch if h_end > h_patch else h_end
+            w_end = w_patch if w_end > w_patch else w_end
+
+            w_masked = torch.zeros(h_patch, w_patch, device=device).float()
+            w_masked[h_start:h_end, w_start:w_end] = 1
+            w_masked = w_masked.view(h_patch * w_patch, 1).squeeze(1)
+            window[index] = w_masked
+
+        return window
 
     # input:
     #   latent frame, [1,dim,H,W]
@@ -25,14 +56,13 @@ class LatentWarper:
         # simple way, 2 for loop, check new latent coordinate
         for h in range(new_latent.shape[0]):
             for w in range(new_latent.shape[1]):
-                h_flow = h - flow[h][w][0]
-                w_flow = w - flow[h][w][1]
+                h_flow = h - torch.round(flow[h][w][1])
+                w_flow = w - torch.round(flow[h][w][0])
                 if h_flow < 0 or w_flow < 0:
                     continue
                 elif h_flow > new_latent.shape[0]-1 or w_flow > new_latent.shape[1]-1:
                     continue
-                pre = pre_latent[h_flow][w_flow]
-                new_latent[h][w] = pre_latent[h_flow][w_flow]
+                new_latent[h][w] = pre_latent[int(h_flow)][int(w_flow)]
 
         return new_latent.permute(2,0,1).unsqueeze(0) # return [1,dim=16,H=60,W=104]
 
@@ -82,12 +112,37 @@ class LatentWarper:
             block += 1
         self.save_flow_video(rgb_flow, video_name=f'flow_video{block}.mp4')
 
+    def cv_flow(self, t, h_patch, w_patch):
+        flow = []
+        for index in range(t.shape[0]-1):
+            q, k = t[index].view(h_patch, w_patch, 1) * 255, t[index+1].view(h_patch, w_patch, 1) * 255
+            q = q.detach().float().to("cpu").numpy()
+            k = k.detach().float().to("cpu").numpy()
+            f = cv2.calcOpticalFlowFarneback(
+                q,
+                k,
+                None,
+                pyr_scale=0.8,
+                levels=7,
+                winsize=20,
+                iterations=5,
+                poly_n=5,
+                poly_sigma=1.2,
+                flags=0
+            )
+            flow.append(f)
+        flow = torch.from_numpy(np.asarray(flow)).float()
+        return flow
+
     def token_flow(self, t, h_patch, w_patch):
         # t = F.normalize(t, dim=-1) # normalize
         flow = []
         for index in range(t.shape[0]-1):
             q, k = t[index], t[index+1]
             sim = torch.matmul(q, k.transpose(0, 1))
+            # build a neighbor mask window, then argmax
+            window = self._build_warp_window(h_patch, w_patch, window_size=3, device=sim.device)
+            sim = sim * window
             idx = sim.argmax(dim=-1)
             map_h = idx // w_patch
             map_w = idx % w_patch
@@ -105,7 +160,7 @@ class LatentWarper:
             flow.append(flow_delta)
 
         self.flow_monitor(flow)
-        return flow
+        return torch.stack(flow, dim=0)
 
     def _latent_norm(self, x):
         x_ch_first = x.transpose(1, 2)  # [4, 16, 60*104]
@@ -126,15 +181,15 @@ class LatentWarper:
         latent = latent.permute(0, 2, 3, 1)[2:6]  # [6, 60, 104, 16] -> [4, 60, 104, 16]
         latent = latent.view(4, h_patch * w_patch, dim)
         latent  = self._latent_norm(latent)
-        # latent = latent[..., [5]]                     # select 5th. channel latent.
+        latent = latent[..., [6]]                     # select 5th. channel latent.
 
         if latent.dim() == 2:
             latent = latent.unsqueeze(-1)
         elif latent.dim() != 3:
             logging.error(f"latent: {latent.shape}, size error! should be 3")
 
-        flow = self.token_flow(latent, h_patch, w_patch)  # size: [3, 60, 104, 2]
-        flow = torch.stack(flow, dim=0)
+        # flow = self.token_flow(latent, h_patch, w_patch)  # size: [3, 60, 104, 2]
+        flow = self.cv_flow(latent, h_patch, w_patch)
         flow = flow.view(3, h_patch, w_patch, 2)
 
         # view flow distant
@@ -190,7 +245,7 @@ def read_video(video_path, device="cpu"):
 if __name__ == "__main__":
     tensor_name = "../../../latent.pt"
     video_path = "../../../outputs/output_clean.mp4"
-    r_video = True
+    r_video = False
     show_warpt = False
 
     pre_block, cur_block = None, None
@@ -198,6 +253,10 @@ if __name__ == "__main__":
         video = read_video(video_path)
         pre_block = video[0:3].unsqueeze(0)[..., 210:270, 312:416] # [480, 832] -> [60, 104]
         cur_block = video[3:6].unsqueeze(0)[..., 210:270, 312:416]
+        # pre_block = video[0:3].unsqueeze(0) # [480, 832] -> [60, 104]
+        # cur_block = video[3:6].unsqueeze(0)
+        # each frame to gray.
+        pre_block, cur_block = pre_block[:, :, [1], :, :], cur_block[:, :, [1], :, :]
         show_warpt = True
     else:
         t = torch.load(tensor_name, map_location=torch.device("cpu")) # [B, L, dim]
@@ -205,19 +264,24 @@ if __name__ == "__main__":
         cur_block = t[0][3]
 
     W = LatentWarper(pre_block, cur_block)
-    warpt = W.warp()
-    print(warpt.shape)
 
-    pre_block = pre_block.float()[0].permute(0, 2, 3, 1)[..., [0,1,2]]
-    cur_block = cur_block.float()[0].permute(0, 2, 3, 1)[..., [0,1,2]]
+    pre_block = pre_block.float()[0].permute(0, 2, 3, 1)[..., [0,0,0]]
+    cur_block = cur_block.float()[0].permute(0, 2, 3, 1)[..., [0,0,0]]
 
     A = pre_block.unsqueeze(-2).cpu().numpy()
     B_ = cur_block.unsqueeze(-2).cpu().numpy()
     W.save_flow_video(A, video_name=f'flow_video_A.mp4')
     W.save_flow_video(B_, video_name=f'flow_video_B_.mp4')
 
+    warpt = W.warp()
+    print(warpt.shape)
+
     # when warpt dim=3, save and view warpt
     if show_warpt:
         warpt = warpt.float()[0].permute(0, 2, 3, 1)[..., [0,1,2]] # size = [3,60,104,3]
         B = warpt.unsqueeze(-2).cpu().numpy()
         W.save_flow_video(B, video_name=f'flow_video_W.mp4')
+    # else:
+    #     warpt = warpt.float()[0].permute(0, 2, 3, 1)[..., [0,1,2]] # size = [3,60,104,3]
+    #     B = warpt.unsqueeze(-2).cpu().numpy()
+    #     W.save_flow_video(B, video_name=f'flow_video_W.mp4')

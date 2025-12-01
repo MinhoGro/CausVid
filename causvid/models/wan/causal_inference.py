@@ -182,7 +182,7 @@ class InferencePipeline(torch.nn.Module):
                         denoised_pred = self.new_latent.to(denoised_pred.device, denoised_pred.dtype)
                         latent_warpt = True
                         # warpt step -> final step
-                        break
+                        # break
 
                     # if not first chunk, skip steps
                     if latent_warpt:
