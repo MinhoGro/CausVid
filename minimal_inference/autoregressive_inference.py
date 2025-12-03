@@ -53,7 +53,7 @@ for prompt_index in tqdm(range(len(dataset))):
 
         if captured:
             self_attn_buf = captured.get("self_attn", [])
-            self_attn = torch.cat(self_attn_buf, dim=1).cpu()  # [B, n*L, dim]
+            self_attn = torch.cat(self_attn_buf, dim=0).cpu()  # [B, n*L, dim]
             torch.save(self_attn, "self_attn_tokens.pt")
             self_attn_buf.clear()
 

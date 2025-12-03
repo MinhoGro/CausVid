@@ -15,7 +15,7 @@ class LatentWarper:
         self.cur_block = cur_block
         self.output_dir = '/root/autodl-tmp/CausVid/flows'
         self.localout_dir = '../../../flows'
-        self.p = Path(self.output_dir)
+        self.p = Path(self.localout_dir)
         # todo: build windows here
 
     def _get_grid_coords(self, h_patch, w_patch, device):
@@ -134,6 +134,10 @@ class LatentWarper:
         flow = torch.from_numpy(np.asarray(flow)).float()
         return flow
 
+    def attn_flow(self, t, h_patch, w_patch):
+        flow = []
+        return flow # dim = [frame, h, w, 2]
+
     def token_flow(self, t, h_patch, w_patch):
         # t = F.normalize(t, dim=-1) # normalize
         flow = []
@@ -142,7 +146,7 @@ class LatentWarper:
             sim = torch.matmul(q, k.transpose(0, 1))
             # build a neighbor mask window, then argmax
             window = self._build_warp_window(h_patch, w_patch, window_size=3, device=sim.device)
-            sim = sim * window
+            # sim = sim * window
             idx = sim.argmax(dim=-1)
             map_h = idx // w_patch
             map_w = idx % w_patch
@@ -181,7 +185,7 @@ class LatentWarper:
         latent = latent.permute(0, 2, 3, 1)[2:6]  # [6, 60, 104, 16] -> [4, 60, 104, 16]
         latent = latent.view(4, h_patch * w_patch, dim)
         latent  = self._latent_norm(latent)
-        latent = latent[..., [6]]                     # select 5th. channel latent.
+        # latent = latent[..., [6]]                     # select 5th. channel latent.
 
         if latent.dim() == 2:
             latent = latent.unsqueeze(-1)
@@ -200,7 +204,7 @@ class LatentWarper:
                 for j in range(f.shape[1]):
                     x = f[i][j][0]
                     y = f[i][j][1]
-                    f_dist[i][j] = y +x
+                    f_dist[i][j] = y
             flow_dist.append(f_dist)
 
         # warp latent
@@ -244,12 +248,24 @@ def read_video(video_path, device="cpu"):
 
 if __name__ == "__main__":
     tensor_name = "../../../latent.pt"
+    self_attn_tensor = "../../../self_attn_token.pt"
     video_path = "../../../outputs/output_clean.mp4"
     r_video = False
+    r_selfattn = False
     show_warpt = False
 
     pre_block, cur_block = None, None
-    if r_video:
+    if r_selfattn:
+        t = torch.load(self_attn_tensor,  map_location=torch.device("cpu")) # [B, frames*L, dim]
+        # 3 frames per block, 7 blocks
+        # t = t.view(1, 21, 30, 52, t.shape[-1])
+        # t = t.permute(0, 1, 4, 2, 3) # tensor[1, frames, dim, H, W], self attention H=30,W=52
+        pre_block = t[0].view(3, 30, 52, t[0].shape[-1]).unsqueeze(0) # target shape tensor[1, 3, dim, H, W]
+        cur_block = t[2].view(3, 30, 52, t[0].shape[-1]).unsqueeze(0)
+        pre_block = pre_block.permute(0, 1, 4, 2, 3)[:,:,[0],:,:]
+        cur_block = cur_block.permute(0, 1, 4, 2, 3)[:,:,[0],:,:]
+        show_warpt = True
+    elif r_video:
         video = read_video(video_path)
         pre_block = video[0:3].unsqueeze(0)[..., 210:270, 312:416] # [480, 832] -> [60, 104]
         cur_block = video[3:6].unsqueeze(0)[..., 210:270, 312:416]
@@ -262,8 +278,15 @@ if __name__ == "__main__":
         t = torch.load(tensor_name, map_location=torch.device("cpu")) # [B, L, dim]
         pre_block = t[0][2]
         cur_block = t[0][3]
+        pre_block = pre_block[:, :, [1], :, :]
+        cur_block = cur_block[:, :, [1], :, :]
+        show_warpt = True
 
     W = LatentWarper(pre_block, cur_block)
+
+    if pre_block is None or cur_block is None:
+        logging.error(f'pre_block and cur_block are None, fill blocks first.')
+        exit(1)
 
     pre_block = pre_block.float()[0].permute(0, 2, 3, 1)[..., [0,0,0]]
     cur_block = cur_block.float()[0].permute(0, 2, 3, 1)[..., [0,0,0]]
@@ -278,7 +301,7 @@ if __name__ == "__main__":
 
     # when warpt dim=3, save and view warpt
     if show_warpt:
-        warpt = warpt.float()[0].permute(0, 2, 3, 1)[..., [0,1,2]] # size = [3,60,104,3]
+        warpt = warpt.float()[0].permute(0, 2, 3, 1)[..., [0,0,0]] # size = [3,60,104,3]
         B = warpt.unsqueeze(-2).cpu().numpy()
         W.save_flow_video(B, video_name=f'flow_video_W.mp4')
     # else:

@@ -174,15 +174,15 @@ class InferencePipeline(torch.nn.Module):
 
                     latent_warpt = False
                     # if not 1st video chunk, warp latents.
-                    if index == 1 and len(self.captured["latent"][-1]) > 0:  # captured["latent"].size() = [time_step_index, block_index, ...]
-                        logging.warning(f'current timestep {current_timestep}\n.')
-                        # latent warp
-                        warper = LatentWarper(self.captured["latent"][-1][-1], denoised_pred)
-                        self.new_latent = warper.warp() # next 3 frames latent, type=tensor, size: [1, 3, 16, 60, 104]
-                        denoised_pred = self.new_latent.to(denoised_pred.device, denoised_pred.dtype)
-                        latent_warpt = True
-                        # warpt step -> final step
-                        # break
+                    # if index == 1 and len(self.captured["latent"][-1]) > 0:  # captured["latent"].size() = [time_step_index, block_index, ...]
+                    #     logging.warning(f'current timestep {current_timestep}\n.')
+                    #     # latent warp
+                    #     warper = LatentWarper(self.captured["latent"][-1][-1], denoised_pred)
+                    #     self.new_latent = warper.warp() # next 3 frames latent, type=tensor, size: [1, 3, 16, 60, 104]
+                    #     denoised_pred = self.new_latent.to(denoised_pred.device, denoised_pred.dtype)
+                    #     latent_warpt = True
+                    #     # warpt step -> final step
+                    #     break
 
                     # if not first chunk, skip steps
                     if latent_warpt:
